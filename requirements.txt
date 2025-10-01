@@ -1,0 +1,5 @@
+google-generativeai
+sounddevice
+scipy
+webrtcvad-wheels
+python-dotenv
