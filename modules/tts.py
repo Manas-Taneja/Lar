@@ -1,8 +1,11 @@
+# modules/tts.py
+
 import subprocess
 import sys
 import os
 import soundfile as sf
 import sounddevice as sd
+import uuid
 
 # --- Robust Path Setup ---
 try:
@@ -17,8 +20,8 @@ except ImportError:
 
 def speak(text: str):
     """
-    Synthesizes text to an audio file using Piper, then plays it using
-    the sounddevice library, avoiding command-line players.
+    Synthesizes text to a temporary WAV file using the Piper CLI
+    and plays it. This is the most reliable method.
     """
     if not text:
         print("TTS: Received empty text. Nothing to speak.")
@@ -26,32 +29,37 @@ def speak(text: str):
 
     print(f"Lar: {text}")
     
-    output_path = "output.wav"
-
+    # Generate a unique path for the temporary audio file
+    temp_file_path = os.path.join(project_root, "audio", f"output_{uuid.uuid4()}.wav")
+    
+    # Build the command to call the Piper executable
     piper_command = [
         config.PIPER_PATH,
         '--model', config.PIPER_MODEL_PATH,
-        '--output_file', output_path
+        '--output_file', temp_file_path
     ]
 
     try:
-        # 1. Generate the audio file from text using Piper
-        piper_process = subprocess.Popen(piper_command, stdin=subprocess.PIPE)
-        piper_process.communicate(input=text.encode('utf-8'))
+        # 1. Generate the audio file by calling the Piper CLI
+        # We pipe the text into the process's standard input.
+        subprocess.run(piper_command, input=text.encode('utf-8'), check=True)
         
-        if not os.path.exists(output_path):
-            print("ERROR: Piper failed to generate the audio file.")
-            return
+        # 2. Play the generated file (the method we know works)
+        if os.path.exists(temp_file_path):
+            data, fs = sf.read(temp_file_path)
+            sd.play(data, fs)
+            sd.wait()
 
-        # 2. Play the audio file using pure Python libraries
-        data, fs = sf.read(output_path, dtype='float32')
-        sd.play(data, fs)
-        sd.wait()  # Wait until the sound has finished playing
-
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Piper CLI failed to generate audio. Return code: {e.returncode}")
+        print(f"Stderr: {e.stderr}")
     except Exception as e:
         print(f"An error occurred during TTS: {e}")
+    finally:
+        # 3. Clean up the temporary file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 if __name__ == '__main__':
-    print("--- Testing TTS Module (Pure Python Playback) ---")
-    test_sentence = "If you can hear this, the pure Python audio playback is working."
-    speak(test_sentence)
+    print("--- Testing TTS Module (CLI-based, Robust Method) ---")
+    speak("If you can hear this, the command-line based TTS is working.")

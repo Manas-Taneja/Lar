@@ -7,15 +7,18 @@ import signal
 import threading
 import time
 
-# --- Robust Path Setup for Modules ---
+# --- Corrected and Consolidated Imports ---
 try:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if script_dir not in sys.path:
         sys.path.append(script_dir)
-    from modules.llm_handler import query_llm
+        
+    import config
     from modules.tts import speak
     from modules.asr import transcribe_audio
-    import config
+    from modules.core_logic import process_prompt
+    from modules.utils import play_sound, ACK_START_SOUND, humanize_text, sanitize_text_for_tts
+
 except ImportError as e:
     print(f"Error importing modules: {e}")
     sys.exit(1)
@@ -30,7 +33,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 # --- Audio Recording Settings ---
-SILENCE_THRESHOLD = 40  # Keep the threshold you settled on
+SILENCE_THRESHOLD = 40
 SILENCE_DURATION = 1.0
 MIC_DEVICE_INDEX = None
 
@@ -48,8 +51,7 @@ def listen_for_speech():
         if stop_event.is_set():
             raise sd.CallbackStop
 
-        float_data = indata.astype(np.float32) / 32768.0
-        volume_norm = np.sqrt(np.mean(float_data**2)) * 500
+        volume_norm = np.linalg.norm(indata) * 10
 
         if volume_norm > SILENCE_THRESHOLD:
             if not is_speaking:
@@ -67,7 +69,9 @@ def listen_for_speech():
             audio_queue.append(indata.copy())
 
     try:
-        with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1, dtype='int16', 
+        # --- THIS IS THE FIX ---
+        # Changed channels from 1 to 2 to match your microphone's capabilities.
+        with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=2, dtype='int16', 
                             device=MIC_DEVICE_INDEX, callback=callback):
             while is_speaking or len(audio_queue) == 0:
                 if stop_event.is_set():
@@ -81,44 +85,22 @@ def listen_for_speech():
     if not audio_queue or stop_event.is_set():
         return None
 
-    print("Recording finished.") # This message should now appear reliably.
+    print("Recording finished.")
     recording = np.concatenate(audio_queue, axis=0)
     write(config.RECORDING_PATH, config.SAMPLE_RATE, recording)
     return config.RECORDING_PATH
 
 
+# This block is for testing this module directly
 if __name__ == "__main__":
-    # We need to import the fastpath commands
-    from modules.fastpath import COMMANDS
-
-    speak("Lar is online and ready.")
-    
-    while not stop_event.is_set():
-        audio_file = listen_for_speech()
-        
-        if stop_event.is_set():
-            break
-
-        if audio_file:
-            user_prompt = transcribe_audio(audio_file).lower() # Convert to lowercase for matching
-            
-            if user_prompt and user_prompt.strip():
-                print(f"You: {user_prompt}")
-                
-                response = None
-                # --- Fastpath Router Logic ---
-                for trigger, function in COMMANDS.items():
-                    if trigger in user_prompt:
-                        response = function(user_prompt)
-                        break # Exit loop once a command is matched
-                
-                # --- LLM Fallback ---
-                if response is None:
-                    response = query_llm(user_prompt)
-
-                speak(response)
-            else:
-                print("Could not understand audio, please try again.")
-    
-    print("\nShutting down.")
-    speak("Lar is shutting down. Goodbye.")
+    sd.default.device = 8 
+    speak("Lar is online and ready for direct testing.")
+    audio_file = listen_for_speech()
+    if audio_file:
+        user_prompt = transcribe_audio(audio_file).lower()
+        if user_prompt:
+            print(f"You: {user_prompt}")
+            response = process_prompt(user_prompt)
+            sanitized_response = sanitize_text_for_tts(response)
+            humanized_response = humanize_text(sanitized_response)
+            speak(humanized_response)

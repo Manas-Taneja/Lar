@@ -1,9 +1,8 @@
-import subprocess
+# modules/asr.py
+
 import sys
 import os
-import sounddevice as sd
-import numpy as np
-from scipy.io.wavfile import write
+from faster_whisper import WhisperModel
 
 # --- Robust Path Setup ---
 try:
@@ -16,61 +15,36 @@ except ImportError:
     print("Error: config.py not found.")
     sys.exit(1)
 
+# --- One-time Model Initialization ---
+# This is a major optimization. We load the model once when the module is imported.
+# On first run, faster-whisper will download the model to a cache.
+model = None
+try:
+    print("Initializing ASR model... (This may take a moment on first run)")
+    model = WhisperModel(config.WHISPER_MODEL_NAME, device="cpu", compute_type="int8")
+    print("ASR model initialized.")
+except Exception as e:
+    print(f"Failed to initialize ASR model: {e}")
+    
+
 def transcribe_audio(audio_path: str) -> str:
     """
-    Transcribes an audio file using whisper.cpp and returns the text.
+    Transcribes an audio file using faster-whisper.
     """
+    if not model:
+        return "ERROR: ASR model not initialized."
     if not os.path.exists(audio_path):
         return "ERROR: Audio file not found."
 
     print("Transcribing audio...")
-    command = [
-        config.WHISPER_CPP_PATH,
-        '-m', config.WHISPER_MODEL_PATH,
-        '-f', audio_path,
-        '--output-txt'  # Tell whisper.cpp to output a .txt file
-    ]
-    
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        segments, info = model.transcribe(audio_path, beam_size=5)
         
-        # Read the transcription from the generated .txt file
-        transcription_path = f"{audio_path}.txt"
-        with open(transcription_path, 'r') as f:
-            transcription = f.read().strip()
-            
-        # Clean up the generated text file
-        os.remove(transcription_path)
-        
+        # Join all transcribed segments into a single string
+        transcription = "".join(segment.text for segment in segments).strip()
+
         print(f"Transcription: '{transcription}'")
         return transcription
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Error during transcription: {e.stderr}")
+    except Exception as e:
+        print(f"Error during transcription: {e}")
         return ""
-    except FileNotFoundError:
-        print("Error: whisper.cpp executable not found at the specified path.")
-        return ""
-
-def record_audio(file_path: str, duration=5, samplerate=config.SAMPLE_RATE):
-    """Records audio from the default microphone and saves it to a file."""
-    print(f"Recording for {duration} seconds... Speak now!")
-    recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
-    sd.wait()  # Wait until recording is finished
-    write(file_path, samplerate, recording)  # Save as WAV file
-    print(f"Recording saved to {file_path}")
-
-if __name__ == '__main__':
-    print("--- Testing ASR Module ---")
-    audio_file = config.RECORDING_PATH
-    
-    # 1. Record audio from the microphone
-    record_audio(audio_file, duration=5)
-    
-    # 2. Transcribe the recorded audio
-    transcribed_text = transcribe_audio(audio_file)
-    
-    if transcribed_text:
-        print(f"\nSUCCESS: You said: '{transcribed_text}'")
-    else:
-        print("\nFAILURE: Transcription failed.")

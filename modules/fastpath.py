@@ -9,11 +9,9 @@ def handle_time_query(text: str) -> str:
     formatted_time = now.strftime("%I:%M %p") # e.g., "03:48 PM"
     return f"The current time is {formatted_time}."
 
-# --- Command Registry ---
-# Maps trigger phrases (as simple strings) to their handler functions.
-# The main loop will check if a user's prompt *contains* one of these keys.
+# --- New Command Registry ---
+# Maps a function to a list of keyword tuples.
+# The prompt must contain all keywords from at least one tuple.
 COMMANDS = {
-    "what's the time": handle_time_query,
-    "what is the time": handle_time_query,
-    "time right now": handle_time_query,
+    handle_time_query: [("what", "time"), ("current", "time"), ("the", "time")]
 }

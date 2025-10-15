@@ -9,12 +9,12 @@ RECORDING_PATH = os.path.join(PROJECT_ROOT, "audio", "prompt.wav")
 SAMPLE_RATE = 16000
 
 # --- ASR (Whisper) ---
-WHISPER_CPP_PATH = os.path.join(PROJECT_ROOT, "whisper.cpp", "build", "bin", "whisper-cli")
-WHISPER_MODEL_PATH = os.path.join(PROJECT_ROOT, "whisper.cpp", "models", "ggml-base.en.bin")
+WHISPER_MODEL_NAME = "tiny.en"
 
 # --- TTS (Piper) ---
 PIPER_PATH = os.path.join(PROJECT_ROOT, "tools", "piper", "piper")
-PIPER_MODEL_PATH = os.path.join(PROJECT_ROOT, "tools", "piper", "en_US-lessac-medium.onnx")
+PIPER_MODEL_PATH = os.path.join(PROJECT_ROOT, "tools", "piper", "en_GB-cori-medium.onnx")
+PIPER_CONFIG_PATH = os.path.join(PROJECT_ROOT, "tools", "piper", "en_GB-cori-medium.onnx.json")
 
 # --- LLM ---
 # The model name for the Gemini API

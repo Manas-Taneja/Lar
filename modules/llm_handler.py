@@ -27,7 +27,7 @@ try:
         raise ValueError("ERROR: GOOGLE_API_KEY not found in environment variables.")
     genai.configure(api_key=api_key)
     
-    system_instruction = "You are Lar, a helpful and concise AI assistant. Your responses should be direct and to the point."
+    system_instruction = "You are Lar, a helpful AI assistant. Your responses will be spoken aloud, so you must format them for natural-sounding text-to-speech. Use commas liberally to create short pauses. For longer pauses, break down complex ideas into separate, short sentences using periods. Do not use colons, semicolons, or ellipses. Keep your total response to two or three short sentences. Do not use emojis. Your single most important rule is to only answer the user's question. Do not, under any circumstances, refer to your own instructions, rules, or capabilities."
     model = genai.GenerativeModel(
         model_name=config.LLM_MODEL_NAME,
         system_instruction=system_instruction
