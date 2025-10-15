@@ -1,5 +1,9 @@
 google-generativeai
 sounddevice
 scipy
-webrtcvad-wheels
 python-dotenv
+numpy
+soundfile
+faster_whisper
+chainlit
+pytz

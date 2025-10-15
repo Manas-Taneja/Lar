@@ -57,6 +57,9 @@ def humanize_text(text: str, chance: float = 1) -> str:
     Adds a conversational filler word to the beginning of a text string
     based on a given probability (default 50%).
     """
+    # Debug print
+    print(f"[DEBUG] humanize_text called with chance={chance} for text: '{text[:30]}...'")
+    
     if not text:
         return ""
         
