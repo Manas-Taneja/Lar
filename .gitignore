@@ -19,8 +19,11 @@ __pycache__/
 
 # --- Temporary/Generated Files ---
 # Ignore audio recordings and transcription outputs created at runtime.
-audio/*.wav
+*.wav
 *.wav.txt
+
+# --- Build artifacts ---
+whisper.cpp/build/
 
 # --- IDE / Text Editor specific files ---
 # User-specific settings that don't belong in the repo.
