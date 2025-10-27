@@ -1,7 +1,8 @@
 # modules/core_logic.py
 
-from modules.fastpath import COMMANDS
-# Removed all imports from llm_handler as they are no longer needed here
+# --- MODIFIED IMPORT ---
+# Import from the new fastpath package's __init__.py
+from modules.fastpath import COMMANDS 
 
 def get_prompt_handler_type(user_prompt: str) -> str:
     """

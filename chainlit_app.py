@@ -1,3 +1,4 @@
+# chainlit_app.py
 import chainlit as cl
 import asyncio
 import threading
@@ -23,10 +24,12 @@ MIC_DEVICE_INDEX = 8
 # --- Module Imports ---
 try:
     import config
-    # --- CORRECTED IMPORT ---
     from modules.tts import TTS_Server
     from modules.asr import transcribe_audio
     from modules.core_logic import process_prompt, get_prompt_handler_type
+    # --- New/Modified Imports ---
+    from modules.llm_handler import query_llm_stream
+    from modules.post_llm_tools import run_post_llm_actions
     from modules.utils import humanize_text, sanitize_text_for_tts, THINKING_PHRASES
     from main import listen_for_speech, stop_event
 except ImportError as e:
@@ -40,6 +43,10 @@ def voice_loop():
     """Handles the continuous voice interaction loop in a background thread."""
     global tts_server
     main_loop = asyncio.get_event_loop()
+    if not main_loop:
+        main_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(main_loop)
+        
     while not stop_event.is_set():
         audio_file = listen_for_speech(
             threshold=SILENCE_THRESHOLD,
@@ -61,15 +68,37 @@ def voice_loop():
 
         if handler_type == 'llm':
             tts_server.speak(random.choice(THINKING_PHRASES))
-        
-        response_text = process_prompt(user_prompt)
-        sanitized_response = sanitize_text_for_tts(response_text)
-        final_response = humanize_text(sanitized_response)
-        
-        asyncio.run_coroutine_threadsafe(
-            cl.Message(content=final_response, author="Lar").send(), main_loop
-        )
-        tts_server.speak(final_response)
+            
+            # --- CORRECTED: LLM Streaming Logic ---
+            is_first_sentence = True
+            sentence_generator = query_llm_stream(user_prompt)
+            
+            for sentence in sentence_generator:
+                if is_first_sentence:
+                    final_sentence = humanize_text(sentence)
+                    is_first_sentence = False
+                else:
+                    final_sentence = sentence
+                
+                # Send sentence to Chainlit UI as it's generated
+                asyncio.run_coroutine_threadsafe(
+                    cl.Message(content=final_sentence, author="Lar").send(), main_loop
+                )
+                tts_server.speak(final_sentence)
+            
+            # --- ADDED: Run post-LLM action ---
+            run_post_llm_actions(user_prompt)
+
+        elif handler_type == 'fastpath':
+            # --- Fastpath Logic (Original) ---
+            response_text = process_prompt(user_prompt)
+            sanitized_response = sanitize_text_for_tts(response_text)
+            final_response = humanize_text(sanitized_response)
+            
+            asyncio.run_coroutine_threadsafe(
+                cl.Message(content=final_response, author="Lar").send(), main_loop
+            )
+            tts_server.speak(final_response)
 
 @cl.on_chat_start
 def start():
@@ -78,11 +107,14 @@ def start():
     import sounddevice as sd
     sd.default.device = MIC_DEVICE_INDEX
     
-    # Initialize TTS Server if it's not already running
     if tts_server is None:
         tts_server = TTS_Server()
 
     if cl.user_session.get("voice_thread") is None:
+        # Ensure the loop runs in a context with an event loop
+        loop = asyncio.get_event_loop()
+        cl.user_session.set("main_loop", loop)
+        
         thread = threading.Thread(target=voice_loop, daemon=True)
         thread.start()
         cl.user_session.set('voice_thread', thread)
@@ -95,13 +127,40 @@ async def main(message: cl.Message):
     """Handles text-based input from the Chainlit UI."""
     user_prompt = message.content
     
-    response_text = process_prompt(user_prompt)
-    sanitized_response = sanitize_text_for_tts(response_text)
-    final_response = humanize_text(sanitized_response, chance=0.0)
+    handler_type = get_prompt_handler_type(user_prompt)
     
-    await cl.Message(content=final_response, author="Lar").send()
-    
-    tts_server.speak(final_response)
+    if handler_type == 'llm':
+        # --- CORRECTED: LLM Streaming for Text ---
+        msg = cl.Message(content="", author="Lar")
+        await msg.send()
+        
+        sentence_generator = query_llm_stream(user_prompt)
+        full_response = "" # Accumulate for TTS
+        
+        for sentence in sentence_generator:
+            sanitized = sanitize_text_for_tts(sentence)
+            # No filler words for text responses
+            final_sentence_part = humanize_text(sanitized, chance=0.0) 
+            
+            await msg.stream_token(final_sentence_part + " ")
+            full_response += final_sentence_part + " "
+        
+        await msg.update()
+        
+        # Speak the full response at the end for text
+        tts_server.speak(full_response)
+        
+        # --- ADDED: Run post-LLM action ---
+        run_post_llm_actions(user_prompt)
+
+    elif handler_type == 'fastpath':
+        # --- Fastpath Logic (Original) ---
+        response_text = process_prompt(user_prompt)
+        sanitized_response = sanitize_text_for_tts(response_text)
+        final_response = humanize_text(sanitized_response, chance=0.0)
+        
+        await cl.Message(content=final_response, author="Lar").send()
+        tts_server.speak(final_response)
 
 @cl.on_chat_end
 def end():

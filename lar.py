@@ -1,3 +1,4 @@
+# lar.py
 import sys
 import os
 import signal
@@ -18,8 +19,9 @@ try:
     from main import listen_for_speech, stop_event, signal_handler
     from modules.asr import transcribe_audio
     from modules.llm_handler import query_llm_stream
-    # Import the simplified core logic functions
     from modules.core_logic import get_prompt_handler_type, process_prompt
+    # --- New Import ---
+    from modules.post_llm_tools import run_post_llm_actions
     from modules.tts import TTS_Server
     from modules.utils import THINKING_PHRASES, humanize_text
 except ImportError as e:
@@ -60,10 +62,11 @@ def main_loop(tts_server):
                     final_sentence = sentence
                 
                 tts_server.speak(final_sentence)
+            
+            # --- ADDED: Run post-LLM actions ---
+            run_post_llm_actions(user_prompt)
 
         elif handler_type == 'fastpath':
-            # --- CORRECTED LOGIC ---
-            # Call the dedicated fastpath processor
             response_text = process_prompt(user_prompt) 
             if response_text:
                 tts_server.speak(response_text)
