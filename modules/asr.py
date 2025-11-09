@@ -2,6 +2,9 @@
 import sys
 import os
 import time
+import tempfile
+import numpy as np
+from scipy.io.wavfile import write
 from sarvamai import SarvamAI
 
 # --- Robust Path Setup ---
@@ -27,17 +30,34 @@ else:
     print("Error: SARVAM_API_KEY not found in config.py or .env file.")
     sys.exit(1)
 
-def transcribe_audio(audio_file_path: str) -> str:
+def transcribe_audio(audio_input: str | np.ndarray) -> str:
     """
     Transcribes audio using the Sarvam.ai Speech-to-Text API.
+    Accepts either a file path (str) or a numpy array (np.ndarray).
     """
     if not client:
         print("ASR Error: Sarvam.ai client not initialized.")
         return ""
-        
-    if not os.path.exists(audio_file_path):
-        print(f"ASR Error: Audio file not found at {audio_file_path}")
-        return ""
+    
+    # Handle numpy array input
+    if isinstance(audio_input, np.ndarray):
+        # Create a temporary file for the numpy array
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        try:
+            write(temp_file.name, config.SAMPLE_RATE, audio_input)
+            temp_file.close()
+            audio_file_path = temp_file.name
+            should_delete = True
+        except Exception as e:
+            print(f"ASR Error: Failed to write numpy array to temp file: {e}")
+            return ""
+    else:
+        # Handle file path input
+        audio_file_path = audio_input
+        should_delete = False
+        if not os.path.exists(audio_file_path):
+            print(f"ASR Error: Audio file not found at {audio_file_path}")
+            return ""
 
     print("Transcribing audio via Sarvam.ai...")
     start_time = time.time()
@@ -47,7 +67,7 @@ def transcribe_audio(audio_file_path: str) -> str:
             # Call the Sarvam.ai API
             response = client.speech_to_text.transcribe(
                 file=audio_file,
-                language_code="en-IN" # <-- MODIFIED
+                language_code="en-IN"
             )
         
         transcript = response.transcript
@@ -55,14 +75,23 @@ def transcribe_audio(audio_file_path: str) -> str:
         if transcript:
             end_time = time.time()
             print(f"Transcription: '{transcript}' (Time: {end_time - start_time:.2f}s)")
-            return transcript.strip()
+            result = transcript.strip()
         else:
             print("ASR Warning: Received empty transcript from API.")
-            return ""
+            result = ""
+        
+        return result
 
     except Exception as e:
         print(f"An error occurred during Sarvam.ai ASR: {e}")
         return ""
+    finally:
+        # Clean up temporary file if we created it
+        if should_delete and os.path.exists(audio_file_path):
+            try:
+                os.unlink(audio_file_path)
+            except Exception as e:
+                print(f"Warning: Failed to delete temp file {audio_file_path}: {e}")
 
 if __name__ == '__main__':
     # Test block

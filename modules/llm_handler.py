@@ -18,7 +18,6 @@ except ImportError:
 load_dotenv()
 
 model = None
-chat = None
 try:
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -34,34 +33,38 @@ try:
         system_instruction=system_instruction
     )
     
-    chat = model.start_chat(history=[])
     print("LLM Handler initialized successfully.")
 
 except Exception as e:
     print(f"Failed to initialize LLM Handler: {e}")
 
-def query_llm(prompt: str) -> str:
+def query_llm(prompt: str, history: list | None = None) -> tuple[str, list]:
     """
-    Non-streaming LLM call. Returns the full response text.
+    Non-streaming LLM call. Returns the full response text and updated history.
     """
-    if not chat:
-        return "ERROR: LLM chat session not initialized."
-    try:
-        response = chat.send_message(prompt)
-        return response.text.strip()
-    except Exception as e:
-        return f"An error occurred while querying the LLM: {e}"
-
-def query_llm_stream(prompt: str):
-    """
-    Sends a prompt and streams the response, yielding complete, sanitized sentences.
-    This is now a generator function.
-    """
-    if not chat:
-        yield "ERROR: LLM chat session not initialized."
-        return
+    if not model:
+        return ("ERROR: LLM model not initialized.", [])
     
     try:
+        chat_history = history or []
+        chat = model.start_chat(history=chat_history)
+        response = chat.send_message(prompt)
+        return (response.text.strip(), chat.history)
+    except Exception as e:
+        return (f"An error occurred while querying the LLM: {e}", history or [])
+
+def query_llm_stream(prompt: str, history: list | None = None):
+    """
+    Sends a prompt and streams the response, yielding complete, sanitized sentences.
+    This is now a generator function that returns the updated history.
+    """
+    if not model:
+        yield "ERROR: LLM model not initialized."
+        return history or []
+    
+    try:
+        chat_history = history or []
+        chat = model.start_chat(history=chat_history)
         response_stream = chat.send_message(prompt, stream=True)
         sentence_buffer = ""
         
@@ -87,6 +90,10 @@ def query_llm_stream(prompt: str):
         # Yield any remaining text after the loop
         if sentence_buffer.strip():
             yield sanitize_text_for_tts(sentence_buffer.strip())
+        
+        # Return the updated history
+        return chat.history
             
     except Exception as e:
         yield f"An error occurred during LLM stream: {e}"
+        return history or []

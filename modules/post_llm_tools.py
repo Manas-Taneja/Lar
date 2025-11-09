@@ -8,7 +8,6 @@ from modules.fastpath import (
     handle_time_query,
     handle_program_launch,
     handle_web_search,
-    handle_volume_control,
     handle_media_control,
     handle_weather_query,
     handle_news_query
@@ -44,15 +43,6 @@ POST_LLM_COMMANDS = {
         ("look", "up"),
         ("search", "for"),
         ("find", "information on") # Added an extra trigger
-    ],
-    
-    handle_volume_control: [
-        ("volume",),
-        ("set", "volume"),
-        ("turn", "up"),
-        ("turn", "down"),
-        ("mute",),
-        ("unmute",)
     ],
     
     handle_media_control: [

@@ -3,24 +3,23 @@ import sys
 import os
 import signal
 import random
+import queue
+import threading
+import time
+import numpy as np
 
 # --- Project Path Setup ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.append(script_dir)
 
-# --- Audio Recording Settings ---
-SILENCE_THRESHOLD = 2000000
-SILENCE_DURATION = 1.0
-MIC_DEVICE_INDEX = 8 
-
 # --- Module Imports ---
 try:
-    from main import listen_for_speech, stop_event, signal_handler
+    import config
+    from main import run_wake_word_listener_thread, stop_event, signal_handler
     from modules.asr import transcribe_audio
     from modules.llm_handler import query_llm_stream
     from modules.core_logic import get_prompt_handler_type, process_prompt
-    # --- New Import ---
     from modules.post_llm_tools import run_post_llm_actions
     from modules.tts import TTS_Server
     from modules.utils import THINKING_PHRASES, humanize_text
@@ -28,53 +27,141 @@ except ImportError as e:
     print(f"Error importing modules: {e}")
     sys.exit(1)
 
-def main_loop(tts_server):
-    """Handles the primary, continuous voice interaction loop."""
-    tts_server.speak("Lar is online and ready.")
+# --- Global Queues ---
+asr_queue = queue.Queue()
+logic_queue = queue.Queue()
+tts_queue = queue.Queue()
+
+# --- Global Chat History ---
+chat_history = []
+
+# --- Global TTS Speaking Event (for muting mic) ---
+tts_is_speaking_event = threading.Event()
+
+def asr_worker(stop_event):
+    """ASR worker thread: transcribes audio from asr_queue and puts text on logic_queue."""
+    while not stop_event.is_set():
+        try:
+            numpy_array = asr_queue.get(timeout=1.0)
+            text = transcribe_audio(numpy_array).lower()
+            if text and text.strip():
+                logic_queue.put(text)
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"[ASR Worker] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+def logic_worker(stop_event):
+    """Logic worker thread: processes prompts from logic_queue and puts responses on tts_queue."""
+    global chat_history
     
     while not stop_event.is_set():
-        audio_file = listen_for_speech(
-            threshold=SILENCE_THRESHOLD,
-            duration=SILENCE_DURATION,
-            device_index=MIC_DEVICE_INDEX
-        )
-        if stop_event.is_set() or not audio_file:
-            continue
-
-        user_prompt = transcribe_audio(audio_file).lower()
-        if not user_prompt or not user_prompt.strip():
-            continue
-        
-        print(f"You: {user_prompt}")
-        handler_type = get_prompt_handler_type(user_prompt)
-
-        if handler_type == 'llm':
-            tts_server.speak(random.choice(THINKING_PHRASES))
+        try:
+            user_prompt = logic_queue.get(timeout=1.0)
+            print(f"You: {user_prompt}")
             
-            is_first_sentence = True
-            sentence_generator = query_llm_stream(user_prompt)
+            handler_type = get_prompt_handler_type(user_prompt)
             
-            for sentence in sentence_generator:
-                if is_first_sentence:
-                    final_sentence = humanize_text(sentence)
-                    is_first_sentence = False
-                else:
-                    final_sentence = sentence
+            if handler_type == 'fastpath':
+                response_text = process_prompt(user_prompt)
+                if response_text:
+                    tts_queue.put(response_text)
+            
+            elif handler_type == 'llm':
+                tts_queue.put(random.choice(THINKING_PHRASES))
                 
-                tts_server.speak(final_sentence)
-            
-            # --- ADDED: Run post-LLM actions ---
-            run_post_llm_actions(user_prompt)
+                is_first_sentence = True
+                sentence_generator = query_llm_stream(user_prompt, history=chat_history)
+                
+                # Iterate to capture return value
+                # Note: We use next() manually because for loop consumes StopIteration
+                # and we need to capture the return value from the generator
+                try:
+                    while True:
+                        sentence = next(sentence_generator)
+                        if is_first_sentence:
+                            final_sentence = humanize_text(sentence)
+                            is_first_sentence = False
+                        else:
+                            final_sentence = sentence
+                        
+                        tts_queue.put(final_sentence)
+                except StopIteration as e:
+                    # Capture the returned history from the generator
+                    chat_history = e.value if e.value is not None else chat_history
+                
+                # Run post-LLM actions
+                run_post_llm_actions(user_prompt)
+                
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"[Logic Worker] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
 
-        elif handler_type == 'fastpath':
-            response_text = process_prompt(user_prompt) 
-            if response_text:
-                tts_server.speak(response_text)
+def main_loop(tts_server):
+    """
+    Main loop: starts worker threads and handles TTS output.
+    This is now the TTS worker and thread starter.
+    """
+    # Start the wake word listener thread
+    threading.Thread(
+        target=run_wake_word_listener_thread,
+        args=(asr_queue, stop_event, tts_is_speaking_event, config.MIC_DEVICE_INDEX),
+        daemon=True
+    ).start()
+    
+    # Start the ASR worker thread
+    threading.Thread(
+        target=asr_worker,
+        args=(stop_event,),
+        daemon=True
+    ).start()
+    
+    # Start the Logic worker thread
+    threading.Thread(
+        target=logic_worker,
+        args=(stop_event,),
+        daemon=True
+    ).start()
+    
+    # Speak startup message
+    tts_server.speak("Lar is online and ready.")
+    
+    # Main TTS loop: get sentences from tts_queue and speak them
+    while not stop_event.is_set():
+        sentence_to_speak = None
+        try:
+            # Get a sentence from the queue
+            sentence_to_speak = tts_queue.get(timeout=1.0)
+
+            if sentence_to_speak:
+                # --- Mute the mic ---
+                tts_is_speaking_event.set()
+
+                # Attempt to speak
+                tts_server.speak(sentence_to_speak)
+
+        except queue.Empty:
+            # This is normal, just loop again
+            continue
+        except Exception as e:
+            # Log any other errors (e.g., BrokenPipeError from TTS)
+            print(f"TTS Worker Error: {e}")
+        finally:
+            # --- THIS IS THE FIX ---
+            # If we got a sentence (even if speak() failed),
+            # we MUST unmute the mic.
+            if sentence_to_speak:
+                time.sleep(0.1)  # Buffer for audio to fade
+                tts_is_speaking_event.clear()
 
 if __name__ == "__main__":
-    import sounddevice as sd
-    sd.default.device = MIC_DEVICE_INDEX
-
     signal.signal(signal.SIGINT, signal_handler)
     
     tts_server = TTS_Server()

@@ -37,6 +37,10 @@ COMMANDS = {
         ("set", "volume"),
         ("turn", "up"),
         ("turn", "down"),
+        ("volume", "down"),
+        ("volume", "up"),
+        ("max", "volume"),
+        ("full", "volume"),
         ("mute",),
         ("unmute",)
     ],
