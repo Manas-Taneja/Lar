@@ -1,8 +1,8 @@
 # modules/asr.py
-
 import sys
 import os
-from faster_whisper import WhisperModel
+import time
+from sarvamai import SarvamAI
 
 # --- Robust Path Setup ---
 try:
@@ -15,36 +15,60 @@ except ImportError:
     print("Error: config.py not found.")
     sys.exit(1)
 
-# --- One-time Model Initialization ---
-# This is a major optimization. We load the model once when the module is imported.
-# On first run, faster-whisper will download the model to a cache.
-model = None
-try:
-    print("Initializing ASR model... (This may take a moment on first run)")
-    model = WhisperModel(config.WHISPER_MODEL_NAME, device="cpu", compute_type="int8")
-    print("ASR model initialized.")
-except Exception as e:
-    print(f"Failed to initialize ASR model: {e}")
-    
-
-def transcribe_audio(audio_path: str) -> str:
-    """
-    Transcribes an audio file using faster-whisper.
-    """
-    if not model:
-        return "ERROR: ASR model not initialized."
-    if not os.path.exists(audio_path):
-        return "ERROR: Audio file not found."
-
-    print("Transcribing audio...")
+# --- Sarvam.ai Client Initialization ---
+client = None
+if config.SARVAM_API_KEY:
     try:
-        segments, info = model.transcribe(audio_path, beam_size=5)
-        
-        # Join all transcribed segments into a single string
-        transcription = "".join(segment.text for segment in segments).strip()
-
-        print(f"Transcription: '{transcription}'")
-        return transcription
+        client = SarvamAI(api_subscription_key=config.SARVAM_API_KEY)
+        print("Sarvam.ai ASR client initialized.")
     except Exception as e:
-        print(f"Error during transcription: {e}")
+        print(f"Failed to initialize Sarvam.ai client: {e}")
+else:
+    print("Error: SARVAM_API_KEY not found in config.py or .env file.")
+    sys.exit(1)
+
+def transcribe_audio(audio_file_path: str) -> str:
+    """
+    Transcribes audio using the Sarvam.ai Speech-to-Text API.
+    """
+    if not client:
+        print("ASR Error: Sarvam.ai client not initialized.")
         return ""
+        
+    if not os.path.exists(audio_file_path):
+        print(f"ASR Error: Audio file not found at {audio_file_path}")
+        return ""
+
+    print("Transcribing audio via Sarvam.ai...")
+    start_time = time.time()
+
+    try:
+        with open(audio_file_path, "rb") as audio_file:
+            # Call the Sarvam.ai API
+            response = client.speech_to_text.transcribe(
+                file=audio_file,
+                language_code="en-IN" # <-- MODIFIED
+            )
+        
+        transcript = response.transcript
+        
+        if transcript:
+            end_time = time.time()
+            print(f"Transcription: '{transcript}' (Time: {end_time - start_time:.2f}s)")
+            return transcript.strip()
+        else:
+            print("ASR Warning: Received empty transcript from API.")
+            return ""
+
+    except Exception as e:
+        print(f"An error occurred during Sarvam.ai ASR: {e}")
+        return ""
+
+if __name__ == '__main__':
+    # Test block
+    print("--- Testing ASR (Sarvam.ai) Module ---")
+    if os.path.exists(config.RECORDING_PATH):
+        transcription = transcribe_audio(config.RECORDING_PATH)
+        print(f"Test Transcription: {transcription}")
+    else:
+        print(f"Test file not found at {config.RECORDING_PATH}. Run main.py to create one.")

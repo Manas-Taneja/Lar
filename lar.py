@@ -10,7 +10,7 @@ if script_dir not in sys.path:
     sys.path.append(script_dir)
 
 # --- Audio Recording Settings ---
-SILENCE_THRESHOLD = 40
+SILENCE_THRESHOLD = 2000000
 SILENCE_DURATION = 1.0
 MIC_DEVICE_INDEX = 8 
 

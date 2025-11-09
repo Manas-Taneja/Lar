@@ -90,7 +90,7 @@ def listen_for_speech(threshold: int, duration: float, device_index: int | None)
 # --- UPDATED TEST BLOCK ---
 # This block is for testing this module directly
 if __name__ == "__main__":
-    SILENCE_THRESHOLD = 40
+    SILENCE_THRESHOLD = 2000000
     SILENCE_DURATION = 1.0
     MIC_DEVICE_INDEX = 8
     

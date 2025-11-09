@@ -23,7 +23,8 @@ COMMANDS = {
         ("open", "console"), ("launch", "console"),
         ("open", "code"), ("launch", "code"),
         ("open", "visual studio"), ("launch", "visual studio"),
-        ("open", "cursor"), ("launch", "cursor")
+        ("open", "cursor"), ("launch", "cursor"),
+        ("open", "spotify"), ("launch", "spotify")
     ],
     
     handle_web_search: [

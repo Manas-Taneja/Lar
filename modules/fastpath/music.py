@@ -1,116 +1,120 @@
-# modules/fastpath/media.py
+# modules/fastpath/desktop.py
 import subprocess
-import re
+import urllib.parse
+import string
+import time
+from shutil import which
 
-# --- Silent Volume Control Logic ---
-def handle_volume_control(text: str) -> str | None:
-    """Controls Spotify's volume using playerctl. Returns None on success."""
-    # ... (code unchanged) ...
-    cmd_base = ["playerctl", "--player=spotify", "volume"]
+# --- REMOVED: No longer import the check from music.py ---
+# We are abandoning this check during launch.
+
+# --- Helper Function (Unchanged) ---
+def _launch_spotify() -> bool:
+    """
+    Tries to launch Spotify using common install methods.
+    Returns True on success, False on failure.
+    """
+    if which("spotify"):
+        try:
+            subprocess.Popen(["spotify"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("[Desktop] Launched Spotify (native).")
+            return True
+        except Exception: pass
+    if which("flatpak"):
+        try:
+            subprocess.Popen(["flatpak", "run", "com.spotify.Client"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("[Desktop] Launched Spotify (flatpak).")
+            return True
+        except Exception: pass
+    if which("snap"):
+        try:
+            subprocess.Popen(["snap", "run", "spotify"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("[Desktop] Launched Spotify (snap).")
+            return True
+        except Exception: pass
     
-    try:
-        if "toggle mute" in text:
-            subprocess.Popen(["playerctl", "--player=spotify", "mute"])
-            return None
-        elif "unmute" in text:
-            subprocess.Popen(cmd_base + ["0.5"]) 
-            return None
-        elif "mute" in text:
-            subprocess.Popen(cmd_base + ["0"]) 
-            return None
-        match = re.search(r"(set volume to|set to|to) (\d{1,3})", text)
-        if match:
-            percentage = int(match.group(2))
-            if percentage > 100: percentage = 100
-            if percentage < 0: percentage = 0
-            volume_float = f"{percentage / 100.0}"
-            subprocess.Popen(cmd_base + [volume_float])
-            return None
-        if "turn it up" in text or "volume up" in text:
-            subprocess.Popen(cmd_base + ["0.05+"]) 
-            return None
-        if "turn it down" in text or "volume down" in text:
-            subprocess.Popen(cmd_base + ["0.05-"])
-            return None
-        if "max volume" in text or "full volume" in text:
-            subprocess.Popen(cmd_base + ["1.0"])
-            return None
-    except FileNotFoundError:
-        return "Error: playerctl not found. Please ensure it is installed."
-    except Exception as e:
-        return "I couldn't control Spotify. Is it running?"
-    return None
+    print("[Desktop] Could not find launch command for Spotify (native/flatpak/snap).")
+    return False
 
-# --- UPDATED: Silent Media Control Logic ---
-MEDIA_COMMANDS = {
-    "play": ["playerctl", "--player=spotify", "play"],
-    "pause": ["playerctl", "--player=spotify", "pause"],
-    "stop": ["playerctl", "--player=spotify", "stop"],
-    "next": ["playerctl", "--player=spotify", "next"],
-    "previous": ["playerctl", "--player=spotify", "previous"],
-    "toggle": ["playerctl", "--player=spotify", "play-pause"]
+# --- Program Launch Logic (MODIFIED) ---
+PROGRAM_REGISTRY = {
+    "firefox": ["brave"],
+    "browser": ["brave"],
+    "brave": ["brave"],
+    "terminal": ["gnome-terminal"],
+    "console": ["gnome-terminal"],
+    "code": ["cursor"],
+    "visual studio": ["cursor"],
+    "cursor": ["cursor"],
+    "spotify": [] # Handled by special logic
 }
 
-GENERIC_PLAY_TERMS = [
-    "play",
-    "resume",
-    "play music",
-    "play spotify",
-    "resume music"
-]
-
-def handle_media_control(text: str) -> str | None: # <-- Return type changed
-    """Controls Spotify using playerctl. Returns None on success."""
-    cmd = None
-    action = None # <-- Changed: Default to None for silent success
-
-    if "next" in text:
-        cmd = MEDIA_COMMANDS["next"]
-    elif "previous" in text or "last" in text:
-        cmd = MEDIA_COMMANDS["previous"]
-    elif "play" in text and "pause" in text:
-        cmd = MEDIA_COMMANDS["toggle"]
-    elif "pause" in text:
-        cmd = MEDIA_COMMANDS["pause"]
-    elif "stop" in text:
-        cmd = MEDIA_COMMANDS["stop"]
-        
-    elif "play" in text or "resume" in text:
-        is_generic_play = False
-        for term in GENERIC_PLAY_TERMS:
-            if text == term:
-                is_generic_play = True
-                break
-        
-        if is_generic_play:
-            cmd = MEDIA_COMMANDS["play"]
-        else:
-            if "play" in text:
-                query_start_index = text.find("play") + len("play")
-            elif "resume" in text:
-                query_start_index = text.find("resume") + len("resume")
-                
-            query = text[query_start_index:].strip()
+def handle_program_launch(text: str) -> str:
+    """Launches a program from the PROGRAM_REGISTRY."""
+    for trigger, command_list in PROGRAM_REGISTRY.items():
+        if trigger in text:
             
-            if query:
-                uri = f"spotify:search:{query}"
-                cmd = ["playerctl", "--player=spotify", "open", uri]
+            if trigger == "spotify":
+                try:
+                    # --- MODIFIED: Simplified Launch ---
+                    print("[Desktop] Attempting to launch Spotify...")
+                    
+                    launched = _launch_spotify()
+                    
+                    if not launched:
+                        # Try xdg-open fallback
+                        print("[Desktop] Launch failed. Trying xdg-open fallback...")
+                        try:
+                            subprocess.Popen(["xdg-open", "spotify:home"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            launched = True
+                        except Exception as e:
+                            print(f"[Desktop] xdg-open fallback failed: {e}")
+                            return "I tried to open Spotify, but all launch methods failed."
+                    
+                    # Give Spotify time to open
+                    print("[Desktop] Giving Spotify 5 seconds to launch...")
+                    time.sleep(5) 
+                    
+                    return "Opening Spotify."
+                    
+                except Exception as e:
+                    return f"An error occurred while launching Spotify: {e}"
+            
             else:
-                cmd = MEDIA_COMMANDS["play"]
-                
-    else:
-        if any(kw in text for kw in ["music", "spotify", "song", "track"]):
-             cmd = MEDIA_COMMANDS["toggle"]
-        else:
-            # No command matched, return an error message to be spoken
-            return "Sorry, I'm not sure what media command to run."
+                # Original logic for other programs
+                try:
+                    subprocess.Popen(command_list)
+                    return f"Opening {trigger}."
+                except FileNotFoundError:
+                    return f"Error: The command '{command_list[0]}' was not found on your system."
+                except Exception as e:
+                    return f"An error occurred: {e}"
+                    
+    return "I'm not sure which program to open."
 
-    # --- Execute the command ---
-    try:
-        subprocess.Popen(cmd)
-        return action # <-- This will return None on success
-    except FileNotFoundError:
-        return "Error: playerctl not found. Please install it."
-    except Exception as e:
-        print(f"Media control error: {e}")
-        return "I couldn't control Spotify. Is it running?"
+# --- Web Search Logic (Unchanged) ---
+SEARCH_TRIGGERS = [
+    "look up",
+    "search for"
+]
+def handle_web_search(text: str) -> str:
+    """Performs a web search using Brave."""
+    for trigger in SEARCH_TRIGGERS:
+        if trigger in text:
+            try:
+                query_start_index = text.find(trigger) + len(trigger)
+                query = text[query_start_index:].strip()
+                query = query.strip(string.punctuation + " ")
+                
+                if not query:
+                    return "What would you like me to search for?"
+                
+                encoded_query = urllib.parse.quote_plus(query)
+                search_url = f"httpsExamples.com/search?q={encoded_query}" # Placeholder, use your preferred search
+                subprocess.Popen(["brave", search_url])
+                return f"Searching for {query}."
+            except Exception as e:
+                return f"An error occurred while searching: {e}"
+    return "I'm not sure what to search for."
