@@ -74,7 +74,7 @@ def run_wake_word_listener_thread(
             input_device_index=mic_device_index
         )
 
-        print(f"Wake word listener started (listening for 'Jarvis')...")
+        print(f"Wake word listener started (listening for 'Hey Lar')...")
 
         current_state = STATE_WAITING_FOR_WAKE_WORD
         command_audio_buffer = []
