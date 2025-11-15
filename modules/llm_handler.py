@@ -1,99 +1,97 @@
+# modules/llm_handler.py
+import requests
+import json
 import sys
 import os
-import google.generativeai as genai
-from dotenv import load_dotenv
 
+# --- Robust Path Setup ---
 try:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     if project_root not in sys.path:
         sys.path.append(project_root)
-    import config
-    # Import the sanitizer to clean text before yielding it
+    # Import sanitize_text_for_tts from utils, not a local copy
     from modules.utils import sanitize_text_for_tts
 except ImportError:
-    print("Error: config.py not found.")
+    print("Error: Could not import from modules. Check paths.")
     sys.exit(1)
 
-load_dotenv()
+# --- Ollama Configuration ---
+OLLAMA_API_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_MODEL = "lar-model"
+SYSTEM_PROMPT = "You are Lar, a helpful AI assistant. Your tone is conversational and natural. Use commas to connect related ideas within a sentence. Keep your responses concise and to the point, typically one or two sentences in total."
 
-model = None
-try:
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError("ERROR: GOOGLE_API_KEY not found in environment variables.")
-    genai.configure(api_key=api_key)
-    
-    # --- SIMPLIFIED SYSTEM PROMPT ---
-    # This is much shorter to reduce the initial processing delay (TTFT).
-    system_instruction = "You are Lar, a helpful AI assistant. Your tone is conversational and natural. Use commas to connect related ideas within a sentence. Keep your responses concise and to the point, typically one or two sentences in total."
-    
-    model = genai.GenerativeModel(
-        model_name=config.LLM_MODEL_NAME,
-        system_instruction=system_instruction
-    )
-    
-    print("LLM Handler initialized successfully.")
+print(f"LLM Handler (Ollama) initialized. Model: {OLLAMA_MODEL}")
 
-except Exception as e:
-    print(f"Failed to initialize LLM Handler: {e}")
-
-def query_llm(prompt: str, history: list | None = None) -> tuple[str, list]:
+def query_llm_stream(prompt: str, history: list) -> iter:
     """
-    Non-streaming LLM call. Returns the full response text and updated history.
+    Sends a prompt and streams the response from Ollama, yielding sentences.
+    This function is a GENERATOR.
+    It takes the prompt and the CURRENT history as arguments.
+    It yields sentences one by one.
+    It RETURNS the UPDATED history.
     """
-    if not model:
-        return ("ERROR: LLM model not initialized.", [])
     
+    # 1. Create a local copy of the history and add the system prompt
+    #    (This is safer for threaded applications than a global history)
+    local_history = [
+        {"role": "system", "content": SYSTEM_PROMPT}
+    ]
+    local_history.extend(history)
+    local_history.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": local_history,
+        "stream": True
+    }
+
+    sentence_buffer = ""
+    full_response_text = ""
+
     try:
-        chat_history = history or []
-        chat = model.start_chat(history=chat_history)
-        response = chat.send_message(prompt)
-        return (response.text.strip(), chat.history)
-    except Exception as e:
-        return (f"An error occurred while querying the LLM: {e}", history or [])
-
-def query_llm_stream(prompt: str, history: list | None = None):
-    """
-    Sends a prompt and streams the response, yielding complete, sanitized sentences.
-    This is now a generator function that returns the updated history.
-    """
-    if not model:
-        yield "ERROR: LLM model not initialized."
-        return history or []
-    
-    try:
-        chat_history = history or []
-        chat = model.start_chat(history=chat_history)
-        response_stream = chat.send_message(prompt, stream=True)
-        sentence_buffer = ""
-        
-        for chunk in response_stream:
-            sentence_buffer += chunk.text
+        with requests.post(OLLAMA_API_URL, json=payload, stream=True) as response:
+            response.raise_for_status()
             
-            # Use a simple split based on common sentence terminators
-            if any(p in sentence_buffer for p in ['.', '?', '!']):
-                # Process buffer into speakable parts
-                # Preserve terminators by replacing them before splitting
-                processed_buffer = sentence_buffer.replace('?', '?|').replace('!', '!|').replace('.', '.|')
-                parts = processed_buffer.split('|')
-                
-                # Yield all complete sentences
-                for i in range(len(parts) - 1):
-                    sentence_to_yield = parts[i].strip()
-                    if sentence_to_yield:
-                        yield sanitize_text_for_tts(sentence_to_yield)
-                
-                # The last part is the new, incomplete sentence
-                sentence_buffer = parts[-1]
-                
-        # Yield any remaining text after the loop
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        chunk_text = chunk.get('message', {}).get('content', '')
+                        
+                        if not chunk_text:
+                            continue
+
+                        sentence_buffer += chunk_text
+                        full_response_text += chunk_text
+
+                        # Use the same sentence-splitting logic
+                        if any(p in sentence_buffer for p in ['.', '?', '!']):
+                            processed_buffer = sentence_buffer.replace('?', '?|').replace('!', '!|').replace('.', '.|')
+                            parts = processed_buffer.split('|')
+                            
+                            for i in range(len(parts) - 1):
+                                sentence_to_yield = parts[i].strip()
+                                if sentence_to_yield:
+                                    yield sanitize_text_for_tts(sentence_to_yield)
+                            
+                            sentence_buffer = parts[-1]
+                            
+                    except json.JSONDecodeError:
+                        print(f"Warning: Received non-JSON line from Ollama: {line}")
+
+        # Yield any remaining text
         if sentence_buffer.strip():
             yield sanitize_text_for_tts(sentence_buffer.strip())
-        
-        # Return the updated history
-        return chat.history
             
+        # 2. Add the complete response to the history
+        local_history.append({"role": "assistant", "content": full_response_text.strip()})
+        
+        # 3. Return the updated history (minus the system prompt)
+        #    The logic_worker will capture this in StopIteration.value
+        return local_history[1:] # Return history without system prompt
+
+    except requests.exceptions.ConnectionError:
+        yield "ERROR: Could not connect to Ollama server."
     except Exception as e:
         yield f"An error occurred during LLM stream: {e}"
-        return history or []

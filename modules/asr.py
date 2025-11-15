@@ -4,8 +4,8 @@ import os
 import time
 import tempfile
 import numpy as np
+import subprocess
 from scipy.io.wavfile import write
-from sarvamai import SarvamAI
 
 # --- Robust Path Setup ---
 try:
@@ -18,30 +18,32 @@ except ImportError:
     print("Error: config.py not found.")
     sys.exit(1)
 
-# --- Sarvam.ai Client Initialization ---
-client = None
-if config.SARVAM_API_KEY:
-    try:
-        client = SarvamAI(api_subscription_key=config.SARVAM_API_KEY)
-        print("Sarvam.ai ASR client initialized.")
-    except Exception as e:
-        print(f"Failed to initialize Sarvam.ai client: {e}")
-else:
-    print("Error: SARVAM_API_KEY not found in config.py or .env file.")
+# --- whisper.cpp Configuration ---
+print("Initializing ASR (whisper.cpp, distil-large-v3.5)...")
+
+WHISPER_CPP_DIR = os.path.join(config.PROJECT_ROOT, "whisper.cpp")
+WHISPER_CPP_MAIN = os.path.join(WHISPER_CPP_DIR, "build", "bin", "whisper-cli")
+WHISPER_MODEL_PATH = os.path.join(WHISPER_CPP_DIR, "models", "ggml-distil-large-v3.5.bin")
+
+# Check if the model and executable exist
+if not os.path.exists(WHISPER_CPP_MAIN):
+    print(f"FATAL: whisper.cpp executable not found at {WHISPER_CPP_MAIN}")
     sys.exit(1)
+if not os.path.exists(WHISPER_MODEL_PATH):
+    print(f"FATAL: Whisper model not found at {WHISPER_MODEL_PATH}")
+    sys.exit(1)
+
+print("✅ ASR (whisper.cpp) initialized successfully.")
+
 
 def transcribe_audio(audio_input: str | np.ndarray) -> str:
     """
-    Transcribes audio using the Sarvam.ai Speech-to-Text API.
+    Transcribes audio using the local whisper.cpp executable.
     Accepts either a file path (str) or a numpy array (np.ndarray).
     """
-    if not client:
-        print("ASR Error: Sarvam.ai client not initialized.")
-        return ""
     
     # Handle numpy array input
     if isinstance(audio_input, np.ndarray):
-        # Create a temporary file for the numpy array
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
         try:
             write(temp_file.name, config.SAMPLE_RATE, audio_input)
@@ -59,31 +61,58 @@ def transcribe_audio(audio_input: str | np.ndarray) -> str:
             print(f"ASR Error: Audio file not found at {audio_file_path}")
             return ""
 
-    print("Transcribing audio via Sarvam.ai...")
     start_time = time.time()
 
+    # --- whisper.cpp Command (Corrected) ---
+    command = [
+        WHISPER_CPP_MAIN,
+        "-l", "en",
+        "-m", WHISPER_MODEL_PATH,
+        "-otxt",
+        "--no-context",
+        "-f", audio_file_path  # <-- FIX 1: The -f flag
+    ]
+    
+    # --- Environment Fix (Corrected) ---
+    custom_env = os.environ.copy()
+    custom_env["LD_LIBRARY_PATH"] = custom_env.get("LD_LIBRARY_PATH", "") + ":/usr/lib/x86_64-linux-gnu/" # <-- FIX 2: The GPU path
+    
     try:
-        with open(audio_file_path, "rb") as audio_file:
-            # Call the Sarvam.ai API
-            response = client.speech_to_text.transcribe(
-                file=audio_file,
-                language_code="en-IN"
-            )
+        # Run the C++ binary with the fixed environment
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding='utf-8',
+            env=custom_env  # <-- FIX 3: Passing the environment
+        )
         
-        transcript = response.transcript
+        transcript_file_path = f"{audio_file_path}.txt"
         
+        if os.path.exists(transcript_file_path):
+            with open(transcript_file_path, 'r', encoding='utf-8') as f:
+                transcript = f.read().strip()
+            os.unlink(transcript_file_path)
+        else:
+            transcript = result.stdout.strip() # Fallback
+
         if transcript:
             end_time = time.time()
             print(f"Transcription: '{transcript}' (Time: {end_time - start_time:.2f}s)")
-            result = transcript.strip()
+            result = transcript
         else:
-            print("ASR Warning: Received empty transcript from API.")
+            print("ASR Warning: Received empty transcript from whisper.cpp.")
             result = ""
         
         return result
 
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred during whisper.cpp ASR:")
+        print(f"STDERR: {e.stderr}")
+        return ""
     except Exception as e:
-        print(f"An error occurred during Sarvam.ai ASR: {e}")
+        print(f"An unknown error occurred during whisper.cpp ASR: {e}")
         return ""
     finally:
         # Clean up temporary file if we created it
@@ -95,9 +124,12 @@ def transcribe_audio(audio_input: str | np.ndarray) -> str:
 
 if __name__ == '__main__':
     # Test block
-    print("--- Testing ASR (Sarvam.ai) Module ---")
-    if os.path.exists(config.RECORDING_PATH):
-        transcription = transcribe_audio(config.RECORDING_PATH)
+    print("--- Testing ASR (whisper.cpp) Module ---")
+    test_file_path = os.path.join(WHISPER_CPP_DIR, "samples", "jfk.wav")
+    
+    if os.path.exists(test_file_path):
+        print(f"Transcribing test file: {test_file_path}")
+        transcription = transcribe_audio(test_file_path)
         print(f"Test Transcription: {transcription}")
     else:
-        print(f"Test file not found at {config.RECORDING_PATH}. Run main.py to create one.")
+        print(f"Test file not found at {test_file_path}. Cannot run test.")

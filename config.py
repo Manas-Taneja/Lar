@@ -37,3 +37,12 @@ PORCUPINE_KEYWORD_PATH = os.path.join(PROJECT_ROOT, "assets", "keywords", "heyla
 
 # Sensitivity of the wake word engine (float between 0 and 1)
 PORCUPINE_SENSITIVITY = 0.5
+
+# --- Spotify (Spotipy) ---
+SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
+SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
+SPOTIPY_REDIRECT_URI = os.getenv("SPOTIPY_REDIRECT_URI")
+# This is the 'scope' or permissions Lar will ask for
+SPOTIPY_SCOPE = "user-modify-playback-state user-read-playback-state"
+# Path to store the authentication token
+SPOTIPY_CACHE_PATH = os.path.join(PROJECT_ROOT, ".spotify_token_cache")

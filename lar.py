@@ -16,6 +16,7 @@ if script_dir not in sys.path:
 # --- Module Imports ---
 try:
     import config
+    # MODIFIED: Import the listener from main.py
     from main import run_wake_word_listener_thread, stop_event, signal_handler
     from modules.asr import transcribe_audio
     from modules.llm_handler import query_llm_stream
@@ -32,7 +33,8 @@ asr_queue = queue.Queue()
 logic_queue = queue.Queue()
 tts_queue = queue.Queue()
 
-# --- Global Chat History ---
+# --- MODIFIED: Global Chat History ---
+# This variable will be managed by the logic_worker
 chat_history = []
 
 # --- Global TTS Speaking Event (for muting mic) ---
@@ -43,6 +45,8 @@ def asr_worker(stop_event):
     while not stop_event.is_set():
         try:
             numpy_array = asr_queue.get(timeout=1.0)
+            if numpy_array is None: continue # Handle potential None from queue
+
             text = transcribe_audio(numpy_array).lower()
             if text and text.strip():
                 logic_queue.put(text)
@@ -56,7 +60,7 @@ def asr_worker(stop_event):
 
 def logic_worker(stop_event):
     """Logic worker thread: processes prompts from logic_queue and puts responses on tts_queue."""
-    global chat_history
+    global chat_history # <-- We will read and write to this global variable
     
     while not stop_event.is_set():
         try:
@@ -74,11 +78,12 @@ def logic_worker(stop_event):
                 tts_queue.put(random.choice(THINKING_PHRASES))
                 
                 is_first_sentence = True
+                
+                # --- MODIFIED LLM CALL ---
+                # 1. Pass the current history to the generator
                 sentence_generator = query_llm_stream(user_prompt, history=chat_history)
                 
-                # Iterate to capture return value
-                # Note: We use next() manually because for loop consumes StopIteration
-                # and we need to capture the return value from the generator
+                # 2. Iterate through the yielded sentences
                 try:
                     while True:
                         sentence = next(sentence_generator)
@@ -90,9 +95,11 @@ def logic_worker(stop_event):
                         
                         tts_queue.put(final_sentence)
                 except StopIteration as e:
-                    # Capture the returned history from the generator
+                    # 3. Capture the returned history and update the global
                     chat_history = e.value if e.value is not None else chat_history
-                
+                    print(f"[Logic Worker] History updated. Length: {len(chat_history)}")
+                # --- END MODIFIED LLM CALL ---
+
                 # Run post-LLM actions
                 run_post_llm_actions(user_prompt)
                 
@@ -107,7 +114,6 @@ def logic_worker(stop_event):
 def main_loop(tts_server):
     """
     Main loop: starts worker threads and handles TTS output.
-    This is now the TTS worker and thread starter.
     """
     # Start the wake word listener thread
     threading.Thread(
@@ -137,28 +143,22 @@ def main_loop(tts_server):
     while not stop_event.is_set():
         sentence_to_speak = None
         try:
-            # Get a sentence from the queue
             sentence_to_speak = tts_queue.get(timeout=1.0)
 
             if sentence_to_speak:
-                # --- Mute the mic ---
                 tts_is_speaking_event.set()
-
-                # Attempt to speak
                 tts_server.speak(sentence_to_speak)
 
         except queue.Empty:
-            # This is normal, just loop again
             continue
         except Exception as e:
-            # Log any other errors (e.g., BrokenPipeError from TTS)
             print(f"TTS Worker Error: {e}")
         finally:
-            # --- THIS IS THE FIX ---
-            # If we got a sentence (even if speak() failed),
-            # we MUST unmute the mic.
             if sentence_to_speak:
-                time.sleep(0.1)  # Buffer for audio to fade
+                # This logic is correct:
+                # Wait for audio to finish playing (approx)
+                # A better way would be to estimate audio length, but this is fine.
+                time.sleep(0.1) 
                 tts_is_speaking_event.clear()
 
 if __name__ == "__main__":
