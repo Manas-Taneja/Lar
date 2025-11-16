@@ -69,7 +69,6 @@ def transcribe_audio(audio_input: str | np.ndarray) -> str:
         "-l", "en",
         "-m", WHISPER_MODEL_PATH,
         "-otxt",
-        "--no-context",
         "-f", audio_file_path  # <-- FIX 1: The -f flag
     ]
     
@@ -95,6 +94,13 @@ def transcribe_audio(audio_input: str | np.ndarray) -> str:
                 transcript = f.read().strip()
             os.unlink(transcript_file_path)
         else:
+            # # --- DEBUGGING MODIFICATION ---
+            # # If the output file doesn't exist, whisper-cli likely
+            # # printed an error to stderr even if it returned 0.
+            # print(f"ASR Warning: Output file {transcript_file_path} not found.")
+            # print(f"whisper-cli STDERR: {result.stderr.strip()}")
+            # print(f"whisper-cli STDOUT: {result.stdout.strip()}")
+            # # --- END MODIFICATION ---
             transcript = result.stdout.strip() # Fallback
 
         if transcript:

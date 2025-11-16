@@ -77,16 +77,36 @@ def logic_worker(stop_event):
             elif handler_type == 'llm':
                 tts_queue.put(random.choice(THINKING_PHRASES))
                 
+                # We still ask the LLM to be concise, but we won't trust it.
+                instructed_prompt = f"{user_prompt} Please answer in one or two sentences."
+
                 is_first_sentence = True
+                sentence_generator = query_llm_stream(instructed_prompt, history=chat_history)
                 
-                # --- MODIFIED LLM CALL ---
-                # 1. Pass the current history to the generator
-                sentence_generator = query_llm_stream(user_prompt, history=chat_history)
-                
-                # 2. Iterate through the yielded sentences
+                # --- NEW CONCISENESS ENFORCEMENT ---
+                sentence_count = 0
+                MAX_SENTENCES = 2 # We will *only* speak this many sentences
+                # --- END NEW ENFORCEMENT ---
+
                 try:
                     while True:
                         sentence = next(sentence_generator)
+
+                        # --- NEW: Check sentence count BEFORE speaking ---
+                        if sentence_count >= MAX_SENTENCES:
+                            # We've spoken enough.
+                            # We must now exhaust the generator to get the history,
+                            # but we will *not* speak any more.
+                            print(f"[Logic Worker] Forcing stream truncation after {MAX_SENTENCES} sentences.")
+                            try:
+                                while True: next(sentence_generator) # Keep pulling until it's empty
+                            except StopIteration as e:
+                                # This is the *real* end of the stream
+                                chat_history = e.value if e.value is not None else chat_history
+                                print(f"[Logic Worker] Stream truncated. History updated. Length: {len(chat_history)}")
+                            break # Exit the main 'while True' loop
+                        # --- END NEW CHECK ---
+
                         if is_first_sentence:
                             final_sentence = humanize_text(sentence)
                             is_first_sentence = False
@@ -94,10 +114,12 @@ def logic_worker(stop_event):
                             final_sentence = sentence
                         
                         tts_queue.put(final_sentence)
+                        sentence_count += 1 # Increment AFTER queuing the sentence
+
                 except StopIteration as e:
-                    # 3. Capture the returned history and update the global
+                    # This happens if the LLM response was *already* short (less than 2 sentences)
                     chat_history = e.value if e.value is not None else chat_history
-                    print(f"[Logic Worker] History updated. Length: {len(chat_history)}")
+                    print(f"[Logic Worker] History updated (short response). Length: {len(chat_history)}")
                 # --- END MODIFIED LLM CALL ---
 
                 # Run post-LLM actions

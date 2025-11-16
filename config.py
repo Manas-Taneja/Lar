@@ -25,7 +25,8 @@ PIPER_CONFIG_PATH = os.path.join(PROJECT_ROOT, "tools", "piper", "en_GB-cori-med
 LLM_MODEL_NAME = "gemini-2.5-flash"
 
 # --- Voice Activity Detection (VAD) Settings ---
-SILENCE_THRESHOLD = 2000000
+# SILENCE_THRESHOLD = 2000000
+SILENCE_THRESHOLD = 500000
 SILENCE_DURATION = 1.0
 MIC_DEVICE_INDEX = 8
 

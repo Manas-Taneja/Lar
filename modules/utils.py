@@ -52,7 +52,7 @@ THINKING_PHRASES = [
     "Processing that for you,"
 ]
 
-def humanize_text(text: str, chance: float = 1) -> str:
+def humanize_text(text: str, chance: float = 0.6) -> str:
     """
     Adds a conversational filler word to the beginning of a text string
     based on a given probability (default 50%).

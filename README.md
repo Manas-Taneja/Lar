@@ -6,7 +6,7 @@ Lar is a Python-based, voice-activated AI assistant with wake word detection. It
 
 - **Wake Word Detection**: Uses Picovoice Porcupine for hands-free activation (e.g., "Jarvis" or "Hey Lar")
 - **Low-Latency Architecture**: Multi-threaded, queue-based design allows parallel processing of audio collection, ASR, and logic processing
-- **Real-Time Transcription**: Uses Sarvam.ai API for fast and accurate speech-to-text
+- **Local Speech Recognition**: Uses whisper.cpp with distil-large-v3.5 model for fast, accurate, offline speech-to-text
 - **Intelligent Responses**: Powered by Google's Gemini 2.5 Flash model with conversational history support
 - **Fastpath Commands**: Bypasses the LLM for common commands to give instant responses (time, weather, media control, volume control, etc.)
 - **"Humanized" TTS**: Adds filler words and natural pauses to make the text-to-speech output sound more human
@@ -33,7 +33,8 @@ This parallel processing dramatically reduces perceived latency compared to a se
 - A working microphone
 - Picovoice Access Key (free at https://console.picovoice.ai/)
 - Google API Key (for Gemini LLM)
-- Sarvam.ai API Key (for ASR)
+- CMake and build tools (for building whisper.cpp)
+- CUDA-capable GPU (optional, for faster transcription)
 
 ### Installation
 
@@ -54,21 +55,43 @@ This parallel processing dramatically reduces perceived latency compared to a se
    pip install -r requirements.txt
    ```
 
-4. **Set up your API keys:**
+4. **Set up whisper.cpp:**
+   - Clone whisper.cpp into the project root:
+     ```bash
+     git clone https://github.com/ggerganov/whisper.cpp.git
+     cd whisper.cpp
+     ```
+   - Build whisper.cpp:
+     ```bash
+     mkdir build && cd build
+     cmake ..
+     make -j$(nproc)
+     ```
+   - Download the distil-large-v3.5 model:
+     ```bash
+     cd ..
+     bash ./models/download-ggml-model.sh distil-large-v3.5
+     ```
+   - Verify the build:
+     ```bash
+     ./build/bin/whisper-cli --help
+     ```
+   - The model should be at `whisper.cpp/models/ggml-distil-large-v3.5.bin`
+
+5. **Set up your API keys:**
    - Create a `.env` file in the root of the project
    - Add your API keys:
      ```
      GOOGLE_API_KEY=your-google-api-key-here
-     SARVAM_API_KEY=your-sarvam-api-key-here
      PICOVOICE_ACCESS_KEY=your-picovoice-access-key-here
      ```
 
-5. **Download the wake word keyword file:**
+6. **Download the wake word keyword file:**
    - Download a built-in keyword file (e.g., "Jarvis") from: https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/linux
    - Place it in `assets/keywords/` directory
    - Update `PORCUPINE_KEYWORD_PATH` in `config.py` if using a different filename
 
-6. **Configure microphone device:**
+7. **Configure microphone device:**
    - Run `python3 check_mic_index.py` to list available input devices
    - Find your microphone in the list and note its index
    - Update `MIC_DEVICE_INDEX` in `config.py` with the correct index
@@ -96,7 +119,7 @@ All settings are in `config.py`:
 - **VAD Settings**: Silence threshold and duration for voice activity detection
 - **Microphone**: Device index (use `check_mic_index.py` to find the correct index)
 - **Wake Word**: Picovoice access key and keyword file path
-- **ASR**: Sarvam.ai API key
+- **ASR**: whisper.cpp executable and model paths (configured automatically)
 - **TTS**: Piper model paths
 - **LLM**: Gemini model name
 
@@ -105,7 +128,7 @@ All settings are in `config.py`:
 - **`lar.py`**: Main orchestrator - starts worker threads and handles TTS output
 - **`main.py`**: Wake word listener and VAD command recorder using PyAudio and Porcupine
 - **`config.py`**: Centralized configuration for all settings
-- **`modules/asr.py`**: Speech-to-text using Sarvam.ai API (accepts numpy arrays or file paths)
+- **`modules/asr.py`**: Speech-to-text using local whisper.cpp (accepts numpy arrays or file paths)
 - **`modules/tts.py`**: Text-to-speech using Piper
 - **`modules/llm_handler.py`**: Interfaces with Google Gemini API with conversational history support
 - **`modules/core_logic.py`**: Routes prompts to fastpath or LLM, prevents greedy word matching
@@ -130,8 +153,11 @@ All settings are in `config.py`:
 - Verify model paths in `config.py`
 
 ### ASR errors
-- Verify `SARVAM_API_KEY` is set in `.env`
-- Check internet connection (Sarvam.ai requires API access)
+- Verify whisper.cpp is built and the executable exists at `whisper.cpp/build/bin/whisper-cli`
+- Check that the model file exists at `whisper.cpp/models/ggml-distil-large-v3.5.bin`
+- If you see "FATAL: whisper.cpp executable not found", rebuild whisper.cpp following step 4 in Installation
+- If transcription is slow, ensure CUDA is properly configured for GPU acceleration
+- Test whisper.cpp manually: `./whisper.cpp/build/bin/whisper-cli -m ./whisper.cpp/models/ggml-distil-large-v3.5.bin -f <audio_file.wav>`
 
 ## Development
 

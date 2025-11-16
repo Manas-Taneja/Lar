@@ -19,7 +19,6 @@ try:
         sys.path.append(script_dir)
         
     import config
-    # --- MODIFIED IMPORT ---
     # We only import the server class for the test block
     from modules.tts import TTS_Server
     from modules.asr import transcribe_audio
@@ -48,10 +47,16 @@ def run_wake_word_listener_thread(
     """
     Listens for the wake word and then records a command using VAD,
     all on a single, continuous PyAudio stream.
+    Includes a "follow-up" mode to avoid repeating the wake word.
     """
 
+    # --- MODIFIED: Added new state ---
     STATE_WAITING_FOR_WAKE_WORD = 1
     STATE_RECORDING_COMMAND = 2
+    STATE_WAITING_FOR_FOLLOW_UP = 3 # <-- NEW STATE
+    
+    # --- NEW: Follow-up timer constant ---
+    FOLLOW_UP_TIMEOUT_DURATION = 5.0 # 5 seconds
 
     pa = None
     porcupine = None
@@ -80,6 +85,10 @@ def run_wake_word_listener_thread(
         command_audio_buffer = []
         silence_start_time = None
         wake_word_time = None  # Track when wake word was detected for timeout
+        
+        # --- NEW: Follow-up timer ---
+        follow_up_timer_start = None
+
         is_speaking = False
         was_tts_speaking = False  # Track if TTS was speaking to detect when it resumes
 
@@ -93,21 +102,15 @@ def run_wake_word_listener_thread(
                 was_tts_speaking = True
                 continue  # Skip all processing while TTS is active
 
-            # --- THIS IS THE NEW FEEDBACK ---
             if was_tts_speaking:
-                print("TTS finished. Resuming wake word listener...")
+                print("TTS finished. Resuming listener...") # Use original string
                 was_tts_speaking = False  # Reset the flag
-            # --- END NEW FEEDBACK ---
 
             # 3. Process audio based on state
             if current_state == STATE_WAITING_FOR_WAKE_WORD:
                 keyword_index = porcupine.process(pcm_struct)
                 if keyword_index >= 0:
                     print("Wake word detected! Listening for command...")
-                    # --- Optional: Play activation sound ---
-                    # from modules.utils import play_sound, ACK_START_SOUND
-                    # play_sound(ACK_START_SOUND) 
-
                     command_audio_buffer.clear()
                     silence_start_time = None
                     wake_word_time = time.time()  # Track when wake word was detected
@@ -115,67 +118,48 @@ def run_wake_word_listener_thread(
                     current_state = STATE_RECORDING_COMMAND
 
             elif current_state == STATE_RECORDING_COMMAND:
-                # Convert frame to numpy array for VAD analysis
-                # Use int16 directly for VAD (matches original logic)
+                # This logic is identical to your old file
                 frame_int16 = np.array(pcm_struct, dtype=np.int16)
-                
-                # Also store normalized float32 for final audio output
                 frame_np = frame_int16.astype(np.float32) / 32768.0
                 command_audio_buffer.append(frame_np)
-
-                # Calculate volume norm using int16 values (matches original logic)
-                # Original code: volume_norm = np.linalg.norm(indata) * 10
-                # where indata was int16 or float32 depending on dtype
-                # For int16 values, norm * 10 gives us the scale we need
                 volume_norm = np.linalg.norm(frame_int16) * 10
                 
-                # Debug: print volume occasionally
+                # --- RESTORED DEBUG PRINT ---
+                # This lets us see if your mic volume is too low
                 if len(command_audio_buffer) % 100 == 0:  # Print every 100 frames
                     print(f"[DEBUG] Volume norm: {volume_norm:.2f}, Threshold: {config.SILENCE_THRESHOLD}, Buffer size: {len(command_audio_buffer)}")
+                # --- END RESTORED DEBUG ---
 
-                # Use original threshold - it was designed for int16 values
                 if volume_norm > config.SILENCE_THRESHOLD:
-                    # --- SPEECH DETECTED ---
                     if not is_speaking:
                         is_speaking = True
                         print("Speech detected, recording...", end="", flush=True)
-                    
-                    # Real-time feedback: print a dot for each speech frame
                     print(".", end="", flush=True)
-                    
                     silence_start_time = None
-                    wake_word_time = None  # Clear timeout since speech was detected
+                    wake_word_time = None
                 else:
                     # Silence detected
                     if is_speaking:
-                        # We were speaking, now silence - start timer
                         if silence_start_time is None:
                             silence_start_time = time.time()
 
                         if (time.time() - silence_start_time) > config.SILENCE_DURATION:
-                            # VAD has triggered (end of speech)
                             print("\nCommand recorded (silence detected).")
-
-                            # Combine all frames into one array
                             full_command_audio = np.concatenate(command_audio_buffer)
-
-                            # Convert float32 to int16 for ASR compatibility
-                            full_command_audio = np.clip(full_command_audio, -1.0, 1.0)
                             full_command_audio = (full_command_audio * 32767).astype(np.int16)
-
-                            # Send to ASR
                             asr_queue.put(full_command_audio)
 
-                            # Reset state
+                            # --- MODIFIED: Go to FOLLOW_UP state ---
+                            print(f"Listening for follow-up ({FOLLOW_UP_TIMEOUT_DURATION}s)...")
                             command_audio_buffer.clear()
                             is_speaking = False
                             silence_start_time = None
                             wake_word_time = None
-                            current_state = STATE_WAITING_FOR_WAKE_WORD
-                            print("Listening for wake word...")
-                    # If not speaking yet, continue recording (waiting for speech to start)
+                            follow_up_timer_start = time.time() # Start follow-up timer
+                            current_state = STATE_WAITING_FOR_FOLLOW_UP
+                            # --- END MODIFICATION ---
+                            
                     elif not is_speaking:
-                        # Timeout after 3 seconds if no speech detected after wake word
                         if wake_word_time and (time.time() - wake_word_time) > 3.0:
                             print("\nNo command detected, timing out.")
                             command_audio_buffer.clear()
@@ -184,12 +168,38 @@ def run_wake_word_listener_thread(
                             wake_word_time = None
                             current_state = STATE_WAITING_FOR_WAKE_WORD
                             print("Listening for wake word...")
+            
+            # --- NEW STATE HANDLER ---
+            elif current_state == STATE_WAITING_FOR_FOLLOW_UP:
+                # 1. Check for timeout
+                if (time.time() - follow_up_timer_start) > FOLLOW_UP_TIMEOUT_DURATION:
+                    print("Follow-up window closed. Listening for wake word...")
+                    follow_up_timer_start = None
+                    current_state = STATE_WAITING_FOR_WAKE_WORD
+                    continue
+
+                # 2. Check for speech (VAD)
+                frame_int16 = np.array(pcm_struct, dtype=np.int16)
+                volume_norm = np.linalg.norm(frame_int16) * 10
+                
+                if volume_norm > config.SILENCE_THRESHOLD:
+                    # Speech detected! Go back to recording state
+                    print("Follow-up detected! Listening for command...")
+                    
+                    frame_np = frame_int16.astype(np.float32) / 32768.0
+                    command_audio_buffer.clear()
+                    command_audio_buffer.append(frame_np)
+
+                    silence_start_time = None
+                    wake_word_time = None
+                    is_speaking = True # We are already speaking
+                    follow_up_timer_start = None # Clear follow-up timer
+                    current_state = STATE_RECORDING_COMMAND
+            # --- END NEW STATE HANDLER ---
 
     except Exception as e:
         print("--- WAKE WORD LISTENER CRITICAL ERROR ---")
-        print(f"An error occurred, which is likely a PICOVOICE configuration issue.")
-        print(f"Please check your PICOVOICE_ACCESS_KEY and PORCUPINE_KEYWORD_PATH in config.py")
-        traceback.print_exc()  # This will print the full error stack
+        traceback.print_exc()
         print("-----------------------------------------")
     finally:
         if audio_stream:
@@ -201,18 +211,15 @@ def run_wake_word_listener_thread(
             porcupine.delete()
 
 
-# --- UPDATED TEST BLOCK ---
-# This block is for testing the wake word listener
+# --- Test Block (Unchanged from your file) ---
 if __name__ == "__main__":
-    # Initialize TTS Server for the test
     tts = TTS_Server()
     test_asr_queue = queue.Queue()
-    test_tts_is_speaking_event = threading.Event()  # Dummy event for testing
+    test_tts_is_speaking_event = threading.Event()
     
     try:
         tts.speak("Lar is online and ready for direct testing.")
         
-        # Start the wake word listener thread
         audio_thread = threading.Thread(
             target=run_wake_word_listener_thread,
             args=(test_asr_queue, stop_event, test_tts_is_speaking_event, config.MIC_DEVICE_INDEX),
@@ -220,7 +227,6 @@ if __name__ == "__main__":
         )
         audio_thread.start()
         
-        # Wait for audio and process it
         while not stop_event.is_set():
             try:
                 recording = test_asr_queue.get(timeout=1.0)
@@ -235,5 +241,4 @@ if __name__ == "__main__":
             except queue.Empty:
                 continue
     finally:
-        # Ensure server is shut down after test
         tts.shutdown()
